@@ -122,25 +122,30 @@ void check_bad_inode() {
 void check_inode_dir_ref() {
     uint ref_counts[sb.ninodes];
     uint use_counts[sb.ninodes];
-  //  uint link_counts[sb.ninodes];
+    uint lnk_counts[sb.ninodes];
+    uint is_regfile[sb.ninodes];
+
     for (uint i = 0; i < sb.ninodes; i++) {
         ref_counts[i] = 0;
         use_counts[i] = 0;
-        //link_counts[i] = 0;
+        lnk_counts[i] = 0;
+        is_regfile[i] = 0;
     }
 
-    // No.9
+    // No.9, 10, 11
     for (int i = INODE_START; i < INODE_END; i++) {
         void *block = get_addr(i);
         for (int j = 0; j < IPB; j++) {
             Inode inode = ((Inode *) block)[j];
             uint selfinum = j + IPB * (i - INODE_START);
             if (inode.type == T_UNUSED) {
-
                 continue;
             }
+            if (inode.type == T_FILE || inode.type == T_DEV) {
+                is_regfile[selfinum] = 1;
+            }
+            lnk_counts[selfinum] = inode.nlink;
             use_counts[selfinum] = 1;
-          //  printf("inum %d, nlink %d", selfinum, inode.nlink);
             if (inode.type != T_DIR) {
                 continue;
             }
@@ -175,16 +180,19 @@ void check_inode_dir_ref() {
         }
     }
 
-    for (uint i = 1; i < sb.ninodes; i++) {
-        if (use_counts[i] != 0) {
+    for (uint i = 2; i < sb.ninodes; i++) {
+        if (use_counts[i] == 1) {
             assert(ref_counts[i] >= 1,
                    "ERROR: inode marked use but not found in a directory.\n");
         }
         if (ref_counts[i] >= 1) {
-            assert(use_counts[i] != 0,
+            assert(use_counts[i] == 1,
                    "ERROR: inode referred to in directory but marked free.\n");
         }
-
+        if (is_regfile[i] == 1) {
+            assert(ref_counts[i] == lnk_counts[i],
+                   "ERROR: bad reference count for file.\n");
+        }
     }
 }
 
