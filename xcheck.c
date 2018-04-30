@@ -87,7 +87,7 @@ void check_bad_inode() {
             if (inode.type == T_UNUSED) {
                 continue;
             }
-            for (int b = 0; b < ITERSIZE(inode); b++) {
+            for (int b = 0; b < NDIRECT; b++) {
                 uint blknum = inode.addrs[b];
                 if (blknum == 0) {
                     continue;
@@ -104,7 +104,7 @@ void check_bad_inode() {
                 continue;
             }
             uint *indblkptr = (uint *) get_addr(indblknum);
-            for (int b = 0; b < BSIZE / sizeof(uint) && b < BUSED(inode); b++) {
+            for (int b = 0; b < BSIZE / sizeof(uint); b++) {
                 uint blknum = indblkptr[b];
                 if (blknum == 0) {
                     continue;
@@ -124,12 +124,14 @@ void check_inode_dir_ref() {
     uint use_counts[sb.ninodes];
     uint lnk_counts[sb.ninodes];
     uint is_regfile[sb.ninodes];
+    uint is_directy[sb.ninodes];
 
     for (uint i = 0; i < sb.ninodes; i++) {
         ref_counts[i] = 0;
         use_counts[i] = 0;
         lnk_counts[i] = 0;
         is_regfile[i] = 0;
+        is_directy[i] = 0;
     }
 
     // No.9, 10, 11
@@ -141,16 +143,17 @@ void check_inode_dir_ref() {
             if (inode.type == T_UNUSED) {
                 continue;
             }
+            use_counts[selfinum] = 1;
+            lnk_counts[selfinum] = inode.nlink;
             if (inode.type == T_FILE || inode.type == T_DEV) {
                 is_regfile[selfinum] = 1;
             }
-            lnk_counts[selfinum] = inode.nlink;
-            use_counts[selfinum] = 1;
             if (inode.type != T_DIR) {
                 continue;
             }
+            is_directy[selfinum] = 1;
             // now inode is a dir
-            for (int b = 0; b < ITERSIZE(inode); b++) {
+            for (int b = 0; b < NDIRECT; b++) {
                 uint blknum = inode.addrs[b];
                 if (blknum == 0) {
                     continue;
@@ -158,6 +161,9 @@ void check_inode_dir_ref() {
                 Dirent *dirents = get_addr(blknum);
                 for (int ndir = 0; ndir < BSIZE / sizeof(Dirent); ndir++) {
                     Dirent r = dirents[ndir];
+                    if (strcmp(r.name, ".") == 0 || strcmp(r.name, "..") == 0) {
+                        continue;
+                    }
                     ref_counts[r.inum]++;
                 }
             }
@@ -166,7 +172,7 @@ void check_inode_dir_ref() {
                 continue;
             }
             uint *indblkptr = (uint *) get_addr(indblknum);
-            for (int b = 0; b < BSIZE / sizeof(uint) && b < BUSED(inode); b++) {
+            for (int b = 0; b < BSIZE / sizeof(uint); b++) {
                 uint blknum = indblkptr[b];
                 if (blknum == 0) {
                     continue;
@@ -174,12 +180,16 @@ void check_inode_dir_ref() {
                 Dirent *dirents = get_addr(blknum);
                 for (int ndir = 0; ndir < BSIZE / sizeof(Dirent); ndir++) {
                     Dirent r = dirents[ndir];
+                    if (strcmp(r.name, ".") == 0 || strcmp(r.name, "..") == 0) {
+                        continue;
+                    }
                     ref_counts[r.inum]++;
                 }
             }
         }
     }
 
+    // Starting from 2 to exclude the root dir
     for (uint i = 2; i < sb.ninodes; i++) {
         if (use_counts[i] == 1) {
             assert(ref_counts[i] >= 1,
@@ -192,6 +202,10 @@ void check_inode_dir_ref() {
         if (is_regfile[i] == 1) {
             assert(ref_counts[i] == lnk_counts[i],
                    "ERROR: bad reference count for file.\n");
+        }
+        if (is_directy[i] == 1) {
+            assert(ref_counts[i] == 1,
+                   "ERROR: directory appears more than once in file system.\n");
         }
     }
 }
@@ -295,7 +309,8 @@ void check_addr_usage() {
             if (inode.type == T_UNUSED) {
                 continue;
             }
-            for (int b = 0; b <= ITERSIZE(inode); b++) {
+            // Keep <= because we want to examine the indirect block
+            for (int b = 0; b <= NDIRECT; b++) {
                 uint blknum = inode.addrs[b];
                 if (blknum != 0) {
                     dir_addrs[dirptr++] = blknum;
@@ -306,7 +321,7 @@ void check_addr_usage() {
                 continue;
             }
             uint *indblkptr = (uint *) get_addr(indblknum);
-            for (int b = 0; b < BSIZE / sizeof(uint) && b < BUSED(inode); b++) {
+            for (int b = 0; b < BSIZE / sizeof(uint); b++) {
                 uint blknum = indblkptr[b];
                 if (blknum != 0) {
                     ind_addrs[indptr++] = blknum;
