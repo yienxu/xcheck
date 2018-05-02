@@ -61,7 +61,7 @@ void *get_addr(uint blknum) {
     return imgptr + blknum * BSIZE;
 }
 
-uint is_block_used(uint blknum) {
+int is_block_used(uint blknum) {
     uchar *bitmap = get_addr(BBLOCK(blknum, sb.ninodes));
     blknum %= BSIZE * 8;
     uint loc = blknum / 8;
@@ -74,7 +74,6 @@ void check_bad_inode() {
         void *block = get_addr(i);
         for (uint j = 0; j < IPB; j++) {
             Inode inode = ((Inode *) block)[j];
-//            uint selfinum = j + IPB * (i - INODE_START);
             // No.1
             assert(inode.type == T_UNUSED || inode.type == T_DIR
                    || inode.type == T_DEV || inode.type == T_FILE,
@@ -162,6 +161,46 @@ void check_bad_data() {
     }
 }
 
+int is_parent_pointing_back(ushort parent_inum, ushort child_inum) {
+    void *block = get_addr(INODE_START + parent_inum / IPB);
+    Inode inode = ((Inode *) block)[parent_inum % IPB];
+    if (inode.type != T_DIR) {
+        return 0;
+    }
+    for (uint b = 0; b < NDIRECT; b++) {
+        uint blknum = inode.addrs[b];
+        if (blknum == 0) {
+            return 0;
+        }
+        Dirent *dirents = get_addr(blknum);
+        for (uint ndir = 0; ndir < BSIZE / sizeof(Dirent); ndir++) {
+            Dirent r = dirents[ndir];
+            if (r.inum == child_inum) {
+                return 1;
+            }
+        }
+    }
+    uint indblknum = inode.addrs[NDIRECT];
+    if (indblknum == 0) {
+        return 0;
+    }
+    uint *indblkptr = (uint *) get_addr(indblknum);
+    for (uint b = 0; b < BSIZE / sizeof(uint); b++) {
+        uint blknum = indblkptr[b];
+        if (blknum == 0) {
+            return 0;
+        }
+        Dirent *dirents = get_addr(blknum);
+        for (uint ndir = 0; ndir < BSIZE / sizeof(Dirent); ndir++) {
+            Dirent r = dirents[ndir];
+            if (r.inum == child_inum) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 void check_dir() {
     // No.4
     for (uint i = INODE_START; i < INODE_END; i++) {
@@ -179,6 +218,8 @@ void check_dir() {
             Dirent prntdir = dirents[1];
             assert(prntdir.inum != 0 && strcmp(prntdir.name, "..") == 0,
                    "ERROR: directory not properly formatted.\n");
+            assert(is_parent_pointing_back(prntdir.inum, selfinum),
+                   "ERROR: parent directory mismatch.\n");
         }
     }
 
@@ -272,7 +313,7 @@ void check_inode_dir_ref() {
         is_directy[i] = 0;
     }
 
-    // No.9, 10, 11, 12
+    // No.9, 10, 11, 12, C1
     for (uint i = INODE_START; i < INODE_END; i++) {
         void *block = get_addr(i);
         for (uint j = 0; j < IPB; j++) {
