@@ -117,42 +117,48 @@ void check_bad_inode() {
 
 void check_bad_data() {
     // No.6
+    uint is_used[sb.size];
+    uint is_refd[sb.size];
+    for (uint i = DATA_START; i < DATA_END; i++) {
+        is_used[i] = 0;
+        is_refd[i] = 0;
+    }
+
     for (uint theb = DATA_START; theb < DATA_END; theb++) {
         uint theblknum = theb;
         if (!is_block_used(theblknum)) {
             continue;
         }
-        uint matched = 0;
-        for (uint i = INODE_START; i < INODE_END && !matched; i++) {
-            void *block = get_addr(i);
-            for (uint j = 0; j < IPB; j++) {
-                Inode inode = ((Inode *) block)[j];
-                if (inode.type == T_UNUSED) {
-                    continue;
-                }
-                for (uint b = 0; b <= NDIRECT; b++) {
-                    uint blknum = inode.addrs[b];
-                    if (theblknum == blknum) {
-                        matched = 1;
-                        break;
-                    }
-                }
-                uint indblknum = inode.addrs[NDIRECT];
-                if (indblknum == 0) {
-                    continue;
-                }
-                uint *indblkptr = (uint *) get_addr(indblknum);
-                for (uint b = 0; b < BSIZE / sizeof(uint); b++) {
-                    uint blknum = indblkptr[b];
-                    if (theblknum == blknum) {
-                        matched = 1;
-                        break;
-                    }
-                }
+        is_used[theb] = 1;
+    }
+    for (uint i = INODE_START; i < INODE_END; i++) {
+        void *block = get_addr(i);
+        for (uint j = 0; j < IPB; j++) {
+            Inode inode = ((Inode *) block)[j];
+            if (inode.type == T_UNUSED) {
+                continue;
+            }
+            for (uint b = 0; b <= NDIRECT; b++) {
+                uint blknum = inode.addrs[b];
+                is_refd[blknum] = 1;
+            }
+            uint indblknum = inode.addrs[NDIRECT];
+            if (indblknum == 0) {
+                continue;
+            }
+            uint *indblkptr = (uint *) get_addr(indblknum);
+            for (uint b = 0; b < BSIZE / sizeof(uint); b++) {
+                uint blknum = indblkptr[b];
+                is_refd[blknum] = 1;
             }
         }
-        assert(matched,
-               "ERROR: bitmap marks block in use but it is not in use.\n");
+    }
+
+    for (uint i = DATA_START; i < DATA_END; i++) {
+        if (is_used[i]) {
+            assert(is_refd[i],
+                   "ERROR: bitmap marks block in use but it is not in use.\n");
+        }
     }
 }
 
