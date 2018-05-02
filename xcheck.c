@@ -8,7 +8,6 @@
 
 
 #define assert(cond, msg)  if (!(cond)) { fprintf(stderr, msg); exit(1); }
-#define min(a, b) ((a) < (b) ? (a) : (b))
 
 #define BSIZE    (512)   // block size
 #define NDIRECT  (12)
@@ -64,6 +63,7 @@ void *get_addr(uint blknum) {
 
 uint is_block_used(uint blknum) {
     uchar *bitmap = get_addr(BBLOCK(blknum, sb.ninodes));
+    blknum %= BSIZE * 8;
     uint loc = blknum / 8;
     uint offset = blknum % 8;
     return (bitmap[loc] & (1 << offset)) != 0;
@@ -163,6 +163,7 @@ void check_bad_data() {
 }
 
 void check_dir() {
+    // No.4
     for (uint i = INODE_START; i < INODE_END; i++) {
         void *block = get_addr(i);
         for (uint j = 0; j < IPB; j++) {
@@ -271,7 +272,7 @@ void check_inode_dir_ref() {
         is_directy[i] = 0;
     }
 
-    // No.9, 10, 11
+    // No.9, 10, 11, 12
     for (uint i = INODE_START; i < INODE_END; i++) {
         void *block = get_addr(i);
         for (uint j = 0; j < IPB; j++) {
