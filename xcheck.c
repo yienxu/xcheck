@@ -50,10 +50,6 @@ typedef struct {
 #define BPB                 (BSIZE * 8)
 // Block containing bit for block b
 #define BBLOCK(b, ninodes)  ((b)/BPB + (ninodes)/IPB + 3)
-// Number of blocks the file is using
-#define BUSED(i)            ((i).size / BSIZE + 1)
-// Iterate size: minimum of the blocks and NDIRECT nodes
-#define ITERSIZE(i)         (min(BUSED(i), NDIRECT))
 
 void *imgptr;
 Superblock sb;
@@ -74,9 +70,9 @@ uint is_block_used(uint blknum) {
 }
 
 void check_bad_inode() {
-    for (int i = INODE_START; i < INODE_END; i++) {
+    for (uint i = INODE_START; i < INODE_END; i++) {
         void *block = get_addr(i);
-        for (int j = 0; j < IPB; j++) {
+        for (uint j = 0; j < IPB; j++) {
             Inode inode = ((Inode *) block)[j];
 //            uint selfinum = j + IPB * (i - INODE_START);
             // No.1
@@ -87,7 +83,7 @@ void check_bad_inode() {
             if (inode.type == T_UNUSED) {
                 continue;
             }
-            for (int b = 0; b < NDIRECT; b++) {
+            for (uint b = 0; b < NDIRECT; b++) {
                 uint blknum = inode.addrs[b];
                 if (blknum == 0) {
                     continue;
@@ -104,7 +100,7 @@ void check_bad_inode() {
                 continue;
             }
             uint *indblkptr = (uint *) get_addr(indblknum);
-            for (int b = 0; b < BSIZE / sizeof(uint); b++) {
+            for (uint b = 0; b < BSIZE / sizeof(uint); b++) {
                 uint blknum = indblkptr[b];
                 if (blknum == 0) {
                     continue;
@@ -116,6 +112,141 @@ void check_bad_inode() {
                        "ERROR: address used by inode but marked free in bitmap.\n");
             }
         }
+    }
+}
+
+void check_bad_data() {
+    // No.6
+    for (uint theb = DATA_START; theb < DATA_END; theb++) {
+        uint theblknum = theb;
+        if (!is_block_used(theblknum)) {
+            continue;
+        }
+        uint matched = 0;
+        for (uint i = INODE_START; i < INODE_END && !matched; i++) {
+            void *block = get_addr(i);
+            for (uint j = 0; j < IPB; j++) {
+                Inode inode = ((Inode *) block)[j];
+                if (inode.type == T_UNUSED) {
+                    continue;
+                }
+                for (uint b = 0; b <= NDIRECT; b++) {
+                    uint blknum = inode.addrs[b];
+                    if (theblknum == blknum) {
+                        matched = 1;
+                        break;
+                    }
+                }
+                uint indblknum = inode.addrs[NDIRECT];
+                if (indblknum == 0) {
+                    continue;
+                }
+                uint *indblkptr = (uint *) get_addr(indblknum);
+                for (uint b = 0; b < BSIZE / sizeof(uint); b++) {
+                    uint blknum = indblkptr[b];
+                    if (theblknum == blknum) {
+                        matched = 1;
+                        break;
+                    }
+                }
+            }
+        }
+        assert(matched,
+               "ERROR: bitmap marks block in use but it is not in use.\n");
+    }
+}
+
+void check_dir() {
+    for (uint i = INODE_START; i < INODE_END; i++) {
+        void *block = get_addr(i);
+        for (uint j = 0; j < IPB; j++) {
+            Inode inode = ((Inode *) block)[j];
+            uint selfinum = j + IPB * (i - INODE_START);
+            if (inode.type != T_DIR) {
+                continue;
+            }
+            Dirent *dirents = (Dirent *) get_addr(inode.addrs[0]);
+            Dirent selfdir = dirents[0];
+            assert(selfdir.inum == selfinum && strcmp(selfdir.name, ".") == 0,
+                   "ERROR: directory not properly formatted.\n");
+            Dirent prntdir = dirents[1];
+            assert(prntdir.inum != 0 && strcmp(prntdir.name, "..") == 0,
+                   "ERROR: directory not properly formatted.\n");
+        }
+    }
+
+    // No.3
+    void *block = get_addr(INODE_START);
+    Inode inode = ((Inode *) block)[1];
+    assert(inode.type == T_DIR, "ERROR: root directory does not exist.\n");
+
+    block = get_addr(inode.addrs[0]);
+    Dirent *dirents = (Dirent *) block;
+    assert(dirents[0].inum == 1 && dirents[1].inum == 1 &&
+           strcmp(dirents[0].name, ".") == 0 &&
+           strcmp(dirents[1].name, "..") == 0,
+           "ERROR: root directory does not exist.\n");
+}
+
+int compar(const void *e1, const void *e2) {
+    uint a = *(uint *) e1;
+    uint b = *(uint *) e2;
+    return b - a;
+}
+
+void check_addr_usage() {
+    // No.7 & 8
+    uint dir_addrs[sb.size];
+    uint dirptr = 0;
+    uint ind_addrs[sb.size];
+    uint indptr = 0;
+    for (uint i = 0; i < sb.size; i++) {
+        dir_addrs[i] = 0;
+        ind_addrs[i] = 0;
+    }
+
+    for (uint i = INODE_START; i <= INODE_END; i++) {
+        void *block = get_addr(i);
+        for (uint j = 0; j < IPB; j++) {
+            Inode inode = ((Inode *) block)[j];
+            if (inode.type == T_UNUSED) {
+                continue;
+            }
+            // Keep <= because we want to examine the indirect block
+            for (uint b = 0; b <= NDIRECT; b++) {
+                uint blknum = inode.addrs[b];
+                if (blknum != 0) {
+                    dir_addrs[dirptr++] = blknum;
+                }
+            }
+            uint indblknum = inode.addrs[NDIRECT];
+            if (indblknum == 0) {
+                continue;
+            }
+            uint *indblkptr = (uint *) get_addr(indblknum);
+            for (uint b = 0; b < BSIZE / sizeof(uint); b++) {
+                uint blknum = indblkptr[b];
+                if (blknum != 0) {
+                    ind_addrs[indptr++] = blknum;
+                }
+            }
+        }
+    }
+
+    qsort(&dir_addrs[0], sb.size, sizeof(uint), compar);
+    qsort(&ind_addrs[0], sb.size, sizeof(uint), compar);
+
+    for (uint i = 0; i < sb.size - 1; i++) {
+        if (dir_addrs[i] == 0 || dir_addrs[i] != dir_addrs[i + 1]) {
+            continue;
+        }
+        assert(0, "ERROR: direct address used more than once.\n");
+    }
+    for (uint i = 0; i < sb.size - 1; i++) {
+        if (ind_addrs[i] == 0 || ind_addrs[i] != ind_addrs[i + 1]) {
+            continue;
+        }
+        assert(0, "ERROR: indirect address used more than once.\n");
     }
 }
 
@@ -135,9 +266,9 @@ void check_inode_dir_ref() {
     }
 
     // No.9, 10, 11
-    for (int i = INODE_START; i < INODE_END; i++) {
+    for (uint i = INODE_START; i < INODE_END; i++) {
         void *block = get_addr(i);
-        for (int j = 0; j < IPB; j++) {
+        for (uint j = 0; j < IPB; j++) {
             Inode inode = ((Inode *) block)[j];
             uint selfinum = j + IPB * (i - INODE_START);
             if (inode.type == T_UNUSED) {
@@ -153,13 +284,13 @@ void check_inode_dir_ref() {
             }
             is_directy[selfinum] = 1;
             // now inode is a dir
-            for (int b = 0; b < NDIRECT; b++) {
+            for (uint b = 0; b < NDIRECT; b++) {
                 uint blknum = inode.addrs[b];
                 if (blknum == 0) {
                     continue;
                 }
                 Dirent *dirents = get_addr(blknum);
-                for (int ndir = 0; ndir < BSIZE / sizeof(Dirent); ndir++) {
+                for (uint ndir = 0; ndir < BSIZE / sizeof(Dirent); ndir++) {
                     Dirent r = dirents[ndir];
                     if (strcmp(r.name, ".") == 0 || strcmp(r.name, "..") == 0) {
                         continue;
@@ -172,13 +303,13 @@ void check_inode_dir_ref() {
                 continue;
             }
             uint *indblkptr = (uint *) get_addr(indblknum);
-            for (int b = 0; b < BSIZE / sizeof(uint); b++) {
+            for (uint b = 0; b < BSIZE / sizeof(uint); b++) {
                 uint blknum = indblkptr[b];
                 if (blknum == 0) {
                     continue;
                 }
                 Dirent *dirents = get_addr(blknum);
-                for (int ndir = 0; ndir < BSIZE / sizeof(Dirent); ndir++) {
+                for (uint ndir = 0; ndir < BSIZE / sizeof(Dirent); ndir++) {
                     Dirent r = dirents[ndir];
                     if (strcmp(r.name, ".") == 0 || strcmp(r.name, "..") == 0) {
                         continue;
@@ -210,148 +341,11 @@ void check_inode_dir_ref() {
     }
 }
 
-void check_bad_data() {
-    // No.6
-    for (uint theb = DATA_START; theb < DATA_END; theb++) {
-        uint theblknum = theb;
-        if (!is_block_used(theblknum)) {
-            continue;
-        }
-        int matched = 0;
-        for (int i = INODE_START; i < INODE_END && !matched; i++) {
-            void *block = get_addr(i);
-            for (int j = 0; j < IPB; j++) {
-                Inode inode = ((Inode *) block)[j];
-                if (inode.type == T_UNUSED) {
-                    continue;
-                }
-                for (int b = 0; b <= NDIRECT; b++) {
-                    uint blknum = inode.addrs[b];
-                    if (theblknum == blknum) {
-                        matched = 1;
-                        break;
-                    }
-                }
-                uint indblknum = inode.addrs[NDIRECT];
-                if (indblknum == 0) {
-                    continue;
-                }
-                uint *indblkptr = (uint *) get_addr(indblknum);
-                for (int b = 0; b < BSIZE / sizeof(uint); b++) {
-                    uint blknum = indblkptr[b];
-                    if (theblknum == blknum) {
-                        matched = 1;
-                        break;
-                    }
-                }
-            }
-        }
-        assert(matched,
-               "ERROR: bitmap marks block in use but it is not in use.\n");
-    }
-}
-
-void check_root_dir() {
-    // No.3
-    void *block = get_addr(INODE_START);
-    Inode inode = ((Inode *) block)[1];
-    assert(inode.type == T_DIR, "ERROR: root directory does not exist.\n");
-
-    block = get_addr(inode.addrs[0]);
-    Dirent *dirents = (Dirent *) block;
-    assert(dirents[0].inum == 1 && dirents[1].inum == 1 &&
-           strcmp(dirents[0].name, ".") == 0 &&
-           strcmp(dirents[1].name, "..") == 0,
-           "ERROR: root directory does not exist.\n");
-}
-
-void check_dir() {
-    for (int i = INODE_START; i < INODE_END; i++) {
-        void *block = get_addr(i);
-        for (int j = 0; j < IPB; j++) {
-            Inode inode = ((Inode *) block)[j];
-            uint selfinum = j + IPB * (i - INODE_START);
-            if (inode.type != T_DIR) {
-                continue;
-            }
-            Dirent *dirents = (Dirent *) get_addr(inode.addrs[0]);
-            Dirent selfdir = dirents[0];
-            assert(selfdir.inum == selfinum && strcmp(selfdir.name, ".") == 0,
-                   "ERROR: directory not properly formatted.\n");
-            Dirent prntdir = dirents[1];
-            assert(prntdir.inum != 0 && strcmp(prntdir.name, "..") == 0,
-                   "ERROR: directory not properly formatted.\n");
-        }
-    }
-}
-
-int compar(const void *e1, const void *e2) {
-    uint a = *(uint *) e1;
-    uint b = *(uint *) e2;
-    return b - a;
-}
-
-void check_addr_usage() {
-    // No.7 & 8
-    uint dir_addrs[sb.size];
-    uint dirptr = 0;
-    uint ind_addrs[sb.size];
-    uint indptr = 0;
-    for (int i = 0; i < sb.size; i++) {
-        dir_addrs[i] = 0;
-        ind_addrs[i] = 0;
-    }
-
-    for (int i = INODE_START; i <= INODE_END; i++) {
-        void *block = get_addr(i);
-        for (int j = 0; j < IPB; j++) {
-            Inode inode = ((Inode *) block)[j];
-            if (inode.type == T_UNUSED) {
-                continue;
-            }
-            // Keep <= because we want to examine the indirect block
-            for (int b = 0; b <= NDIRECT; b++) {
-                uint blknum = inode.addrs[b];
-                if (blknum != 0) {
-                    dir_addrs[dirptr++] = blknum;
-                }
-            }
-            uint indblknum = inode.addrs[NDIRECT];
-            if (indblknum == 0) {
-                continue;
-            }
-            uint *indblkptr = (uint *) get_addr(indblknum);
-            for (int b = 0; b < BSIZE / sizeof(uint); b++) {
-                uint blknum = indblkptr[b];
-                if (blknum != 0) {
-                    ind_addrs[indptr++] = blknum;
-                }
-            }
-        }
-    }
-
-    qsort(&dir_addrs[0], sb.size, sizeof(uint), compar);
-    qsort(&ind_addrs[0], sb.size, sizeof(uint), compar);
-
-    for (int i = 0; i < sb.size - 1; i++) {
-        if (dir_addrs[i] == 0 || dir_addrs[i] != dir_addrs[i + 1]) {
-            continue;
-        }
-        assert(0, "ERROR: direct address used more than once.\n");
-    }
-    for (int i = 0; i < sb.size - 1; i++) {
-        if (ind_addrs[i] == 0 || ind_addrs[i] != ind_addrs[i + 1]) {
-            continue;
-        }
-        assert(0, "ERROR: indirect address used more than once.\n");
-    }
-}
-
 int main(int argc, char *argv[]) {
     assert(argc == 2, "Usage: xcheck <file_system_image>\n");
 
-    int ret;
-    int fd;
+    uint ret;
+    uint fd;
     struct stat filestat;
 
     fd = open(argv[1], O_RDONLY);
@@ -365,8 +359,6 @@ int main(int argc, char *argv[]) {
     assert(imgptr != MAP_FAILED, "error: mmap()\n");
 
     sb = *(Superblock *) get_addr(1);
-//    printf("size=%u, nblocks=%u, ninodes=%u\n\n",
-//           sb.size, sb.nblocks, sb.ninodes);
 
     INODE_START = 2;
     INODE_END = 2 + sb.ninodes / IPB;
@@ -376,7 +368,6 @@ int main(int argc, char *argv[]) {
     check_bad_inode();
     check_bad_data();
     check_dir();
-    check_root_dir();
     check_addr_usage();
     check_inode_dir_ref();
 
