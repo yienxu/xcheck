@@ -5,6 +5,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 
 #define assert(cond, msg)  if (!(cond)) { fprintf(stderr, msg); exit(1); }
@@ -456,6 +457,9 @@ int main(int argc, char *argv[]) {
     // freeing...
     ret = munmap(imgptr, filesize);
     assert(ret == 0, "error: munmap()\n");
+
+    ret = close(fd);
+    assert(ret == 0, "error: close()\n");
 
     return 0;
 }
