@@ -76,46 +76,43 @@ int is_block_used(uint blknum) {
 }
 
 void check_bad_inode() {
-    for (uint i = INODE_START; i < INODE_END; i++) {
-        void *block = get_addr(i);
-        for (uint j = 0; j < IPB; j++) {
-            Inode inode = ((Inode *) block)[j];
-            // No.1
-            assert(inode.type == T_UNUSED || inode.type == T_DIR
-                   || inode.type == T_DEV || inode.type == T_FILE,
-                   "ERROR: bad inode.\n");
-            // No.2 - Direct
-            if (inode.type == T_UNUSED) {
+    for (uint i = 0; i < sb.ninodes; i++) {
+        Inode inode = get_inode(i);
+        // No.1
+        assert(inode.type == T_UNUSED || inode.type == T_DIR
+               || inode.type == T_DEV || inode.type == T_FILE,
+               "ERROR: bad inode.\n");
+        // No.2 - Direct
+        if (inode.type == T_UNUSED) {
+            continue;
+        }
+        for (uint b = 0; b < NDIRECT; b++) {
+            uint blknum = inode.addrs[b];
+            if (blknum == 0) {
                 continue;
             }
-            for (uint b = 0; b < NDIRECT; b++) {
-                uint blknum = inode.addrs[b];
-                if (blknum == 0) {
-                    continue;
-                }
-                assert(blknum < sb.size && blknum >= DATA_START,
-                       "ERROR: bad direct address in inode.\n");
-                // No.5 Direct
-                assert(is_block_used(blknum) == 1,
-                       "ERROR: address used by inode but marked free in bitmap.\n");
-            }
-            // No.2 - Indirect
-            uint indblknum = inode.addrs[NDIRECT];
-            if (indblknum == 0) {
+            assert(blknum < sb.size && blknum >= DATA_START,
+                   "ERROR: bad direct address in inode.\n");
+            // No.5 Direct
+            assert(is_block_used(blknum) == 1,
+                   "ERROR: address used by inode but marked free in bitmap.\n");
+        }
+        // No.2 - Indirect
+        uint indblknum = inode.addrs[NDIRECT];
+        if (indblknum == 0) {
+            continue;
+        }
+        uint *indblkptr = (uint *) get_addr(indblknum);
+        for (uint b = 0; b < BSIZE / sizeof(uint); b++) {
+            uint blknum = indblkptr[b];
+            if (blknum == 0) {
                 continue;
             }
-            uint *indblkptr = (uint *) get_addr(indblknum);
-            for (uint b = 0; b < BSIZE / sizeof(uint); b++) {
-                uint blknum = indblkptr[b];
-                if (blknum == 0) {
-                    continue;
-                }
-                assert(blknum < sb.size && blknum >= DATA_START,
-                       "ERROR: bad indirect address in inode.\n");
-                // No.5 Indirect
-                assert(is_block_used(blknum) == 1,
-                       "ERROR: address used by inode but marked free in bitmap.\n");
-            }
+            assert(blknum < sb.size && blknum >= DATA_START,
+                   "ERROR: bad indirect address in inode.\n");
+            // No.5 Indirect
+            assert(is_block_used(blknum) == 1,
+                   "ERROR: address used by inode but marked free in bitmap.\n");
         }
     }
 }
@@ -136,26 +133,23 @@ void check_bad_data() {
         }
         is_used[theb] = 1;
     }
-    for (uint i = INODE_START; i < INODE_END; i++) {
-        void *block = get_addr(i);
-        for (uint j = 0; j < IPB; j++) {
-            Inode inode = ((Inode *) block)[j];
-            if (inode.type == T_UNUSED) {
-                continue;
-            }
-            for (uint b = 0; b <= NDIRECT; b++) {
-                uint blknum = inode.addrs[b];
-                is_refd[blknum] = 1;
-            }
-            uint indblknum = inode.addrs[NDIRECT];
-            if (indblknum == 0) {
-                continue;
-            }
-            uint *indblkptr = (uint *) get_addr(indblknum);
-            for (uint b = 0; b < BSIZE / sizeof(uint); b++) {
-                uint blknum = indblkptr[b];
-                is_refd[blknum] = 1;
-            }
+    for (uint i = 0; i < sb.ninodes; i++) {
+        Inode inode = get_inode(i);
+        if (inode.type == T_UNUSED) {
+            continue;
+        }
+        for (uint b = 0; b <= NDIRECT; b++) {
+            uint blknum = inode.addrs[b];
+            is_refd[blknum] = 1;
+        }
+        uint indblknum = inode.addrs[NDIRECT];
+        if (indblknum == 0) {
+            continue;
+        }
+        uint *indblkptr = (uint *) get_addr(indblknum);
+        for (uint b = 0; b < BSIZE / sizeof(uint); b++) {
+            uint blknum = indblkptr[b];
+            is_refd[blknum] = 1;
         }
     }
 
@@ -208,25 +202,21 @@ int is_parent_pointing_back(ushort parent_inum, ushort child_inum) {
 
 void check_dir() {
     // No.4
-    for (uint i = INODE_START; i < INODE_END; i++) {
-        void *block = get_addr(i);
-        for (uint j = 0; j < IPB; j++) {
-            Inode inode = ((Inode *) block)[j];
-            uint selfinum = j + IPB * (i - INODE_START);
-            if (inode.type != T_DIR) {
-                continue;
-            }
-            Dirent *dirents = (Dirent *) get_addr(inode.addrs[0]);
-            Dirent selfdir = dirents[0];
-            assert(selfdir.inum == selfinum && strcmp(selfdir.name, ".") == 0,
-                   "ERROR: directory not properly formatted.\n");
-            Dirent prntdir = dirents[1];
-            assert(prntdir.inum != 0 && strcmp(prntdir.name, "..") == 0,
-                   "ERROR: directory not properly formatted.\n");
-            // No. C1
-            assert(is_parent_pointing_back(prntdir.inum, selfinum),
-                   "ERROR: parent directory mismatch.\n");
+    for (uint selfinum = 0; selfinum < sb.ninodes; selfinum++) {
+        Inode inode = get_inode(selfinum);
+        if (inode.type != T_DIR) {
+            continue;
         }
+        Dirent *dirents = (Dirent *) get_addr(inode.addrs[0]);
+        Dirent selfdir = dirents[0];
+        assert(selfdir.inum == selfinum && strcmp(selfdir.name, ".") == 0,
+               "ERROR: directory not properly formatted.\n");
+        Dirent prntdir = dirents[1];
+        assert(prntdir.inum != 0 && strcmp(prntdir.name, "..") == 0,
+               "ERROR: directory not properly formatted.\n");
+        // No. C1
+        assert(is_parent_pointing_back(prntdir.inum, selfinum),
+               "ERROR: parent directory mismatch.\n");
     }
 
     // No.3
@@ -259,30 +249,27 @@ void check_addr_usage() {
         ind_addrs[i] = 0;
     }
 
-    for (uint i = INODE_START; i <= INODE_END; i++) {
-        void *block = get_addr(i);
-        for (uint j = 0; j < IPB; j++) {
-            Inode inode = ((Inode *) block)[j];
-            if (inode.type == T_UNUSED) {
-                continue;
+    for (uint i = 0; i < sb.ninodes; i++) {
+        Inode inode = get_inode(i);
+        if (inode.type == T_UNUSED) {
+            continue;
+        }
+        // Keep <= because we want to examine the indirect block
+        for (uint b = 0; b <= NDIRECT; b++) {
+            uint blknum = inode.addrs[b];
+            if (blknum != 0) {
+                dir_addrs[dirptr++] = blknum;
             }
-            // Keep <= because we want to examine the indirect block
-            for (uint b = 0; b <= NDIRECT; b++) {
-                uint blknum = inode.addrs[b];
-                if (blknum != 0) {
-                    dir_addrs[dirptr++] = blknum;
-                }
-            }
-            uint indblknum = inode.addrs[NDIRECT];
-            if (indblknum == 0) {
-                continue;
-            }
-            uint *indblkptr = (uint *) get_addr(indblknum);
-            for (uint b = 0; b < BSIZE / sizeof(uint); b++) {
-                uint blknum = indblkptr[b];
-                if (blknum != 0) {
-                    ind_addrs[indptr++] = blknum;
-                }
+        }
+        uint indblknum = inode.addrs[NDIRECT];
+        if (indblknum == 0) {
+            continue;
+        }
+        uint *indblkptr = (uint *) get_addr(indblknum);
+        for (uint b = 0; b < BSIZE / sizeof(uint); b++) {
+            uint blknum = indblkptr[b];
+            if (blknum != 0) {
+                ind_addrs[indptr++] = blknum;
             }
         }
     }
@@ -320,56 +307,52 @@ void check_inode_dir_ref() {
     }
 
     // No.9, 10, 11, 12, C1
-    for (uint i = INODE_START; i < INODE_END; i++) {
-        void *block = get_addr(i);
-        for (uint j = 0; j < IPB; j++) {
-            Inode inode = ((Inode *) block)[j];
-            uint selfinum = j + IPB * (i - INODE_START);
-            if (inode.type == T_UNUSED) {
+    for (uint selfinum = 0; selfinum < sb.ninodes; selfinum++) {
+        Inode inode = get_inode(selfinum);
+        if (inode.type == T_UNUSED) {
+            continue;
+        }
+        use_counts[selfinum] = 1;
+        lnk_counts[selfinum] = inode.nlink;
+        if (inode.type == T_FILE || inode.type == T_DEV) {
+            is_regfile[selfinum] = 1;
+        }
+        if (inode.type != T_DIR) {
+            continue;
+        }
+        is_directy[selfinum] = 1;
+        // now inode is a dir
+        for (uint b = 0; b < NDIRECT; b++) {
+            uint blknum = inode.addrs[b];
+            if (blknum == 0) {
                 continue;
             }
-            use_counts[selfinum] = 1;
-            lnk_counts[selfinum] = inode.nlink;
-            if (inode.type == T_FILE || inode.type == T_DEV) {
-                is_regfile[selfinum] = 1;
-            }
-            if (inode.type != T_DIR) {
-                continue;
-            }
-            is_directy[selfinum] = 1;
-            // now inode is a dir
-            for (uint b = 0; b < NDIRECT; b++) {
-                uint blknum = inode.addrs[b];
-                if (blknum == 0) {
+            Dirent *dirents = get_addr(blknum);
+            for (uint ndir = 0; ndir < BSIZE / sizeof(Dirent); ndir++) {
+                Dirent r = dirents[ndir];
+                if (strcmp(r.name, ".") == 0 || strcmp(r.name, "..") == 0) {
                     continue;
                 }
-                Dirent *dirents = get_addr(blknum);
-                for (uint ndir = 0; ndir < BSIZE / sizeof(Dirent); ndir++) {
-                    Dirent r = dirents[ndir];
-                    if (strcmp(r.name, ".") == 0 || strcmp(r.name, "..") == 0) {
-                        continue;
-                    }
-                    ref_counts[r.inum]++;
-                }
+                ref_counts[r.inum]++;
             }
-            uint indblknum = inode.addrs[NDIRECT];
-            if (indblknum == 0) {
+        }
+        uint indblknum = inode.addrs[NDIRECT];
+        if (indblknum == 0) {
+            continue;
+        }
+        uint *indblkptr = (uint *) get_addr(indblknum);
+        for (uint b = 0; b < BSIZE / sizeof(uint); b++) {
+            uint blknum = indblkptr[b];
+            if (blknum == 0) {
                 continue;
             }
-            uint *indblkptr = (uint *) get_addr(indblknum);
-            for (uint b = 0; b < BSIZE / sizeof(uint); b++) {
-                uint blknum = indblkptr[b];
-                if (blknum == 0) {
+            Dirent *dirents = get_addr(blknum);
+            for (uint ndir = 0; ndir < BSIZE / sizeof(Dirent); ndir++) {
+                Dirent r = dirents[ndir];
+                if (strcmp(r.name, ".") == 0 || strcmp(r.name, "..") == 0) {
                     continue;
                 }
-                Dirent *dirents = get_addr(blknum);
-                for (uint ndir = 0; ndir < BSIZE / sizeof(Dirent); ndir++) {
-                    Dirent r = dirents[ndir];
-                    if (strcmp(r.name, ".") == 0 || strcmp(r.name, "..") == 0) {
-                        continue;
-                    }
-                    ref_counts[r.inum]++;
-                }
+                ref_counts[r.inum]++;
             }
         }
     }
@@ -427,18 +410,15 @@ int has_loop(Dirent dir) {
 }
 
 void check_no_loop() {
-    for (uint i = INODE_START; i < INODE_END; i++) {
-        void *block = get_addr(i);
-        for (uint j = 0; j < IPB; j++) {
-            Inode inode = ((Inode *) block)[j];
-            if (inode.type != T_DIR) {
-                continue;
-            }
-            Dirent *dirents = (Dirent *) get_addr(inode.addrs[0]);
-            Dirent prntdir = dirents[1];
-            assert(has_loop(prntdir) == 0,
-                   "ERROR: inaccessible directory exists.\n");
+    for (uint i = 0; i < sb.ninodes; i++) {
+        Inode inode = get_inode(i);
+        if (inode.type != T_DIR) {
+            continue;
         }
+        Dirent *dirents = (Dirent *) get_addr(inode.addrs[0]);
+        Dirent prntdir = dirents[1];
+        assert(has_loop(prntdir) == 0,
+               "ERROR: inaccessible directory exists.\n");
     }
 }
 
